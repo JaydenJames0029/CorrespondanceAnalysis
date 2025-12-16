@@ -495,11 +495,8 @@ function computeRevisionData(docRows) {
 }
 
 function computeLetteredOpen(targetDocs, historyDocs) {
-  const targetStatuses = new Set([
-    "Under Review",
-    "Commented & to be Resubmitted",
-    "Rejected & to be Resubmitted",
-  ]);
+  // Only include items Under Review or Commented & to be Resubmitted (exclude Rejected).
+  const targetStatuses = new Set(["Under Review", "Commented & to be Resubmitted"]);
   // doc keys we need to surface (based on target statuses)
   const neededKeys = new Set(
     targetDocs
@@ -579,13 +576,15 @@ function computeLetteredOpen(targetDocs, historyDocs) {
 
     const flags = inferPhaseFlags(base.issueReasonText || base.issueReason);
     const recips = base.recipients.length ? base.recipients.join(", ") : base.recipientRaw;
+    const currentLetter = Array.from(letterMap.keys()).slice(-1)[0] || "";
     rows.push({
       index: rows.length + 1,
       discipline: base.disciplineCode || base.discipline || "",
       ifcFlag: flags.ifc ? "X" : "",
       documentNumber: base.documentNumber || "",
       title: base.title || "",
-      currentRevision: base.revision || Array.from(letterMap.keys()).slice(-1)[0] || "",
+      currentRevision: currentLetter || base.revision || "",
+      currentLetter,
       category: base.issueReasonText || base.issueReason || "",
       revDates,
       correspondenceNumber: base.correspondenceNumber || "",

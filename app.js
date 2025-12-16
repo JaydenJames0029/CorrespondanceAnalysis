@@ -293,7 +293,8 @@ function readFilters() {
   };
 }
 
-function applyFilters(rows) {
+function applyFilters(rows, opts = {}) {
+  const ignoreStatus = !!opts.ignoreStatus;
   const f = readFilters();
   const recipientFilters = f.recipients.map((r) => r.toLowerCase());
   const disciplineFilters = f.disciplines.map((d) => d.toLowerCase());
@@ -337,11 +338,13 @@ function applyFilters(rows) {
       !(disciplineFilters.includes((r.disciplineCode || r.discipline || "").toLowerCase()))
     )
       return false;
-    if (
-      statusFilters.length &&
-      !statusFilters.includes((r.status || "").toLowerCase())
-    )
-      return false;
+    if (!ignoreStatus) {
+      if (
+        statusFilters.length &&
+        !statusFilters.includes((r.status || "").toLowerCase())
+      )
+        return false;
+    }
     if (
       verdictFilters.length &&
       !verdictFilters.includes((r.verdict || "").toLowerCase())
@@ -491,94 +494,114 @@ function computeRevisionData(docRows) {
   return { columns: revColumns, rows };
 }
 
-function computeLetteredOpen(docRows) {
+function computeLetteredOpen(targetDocs, historyDocs) {
   const targetStatuses = new Set([
     "Under Review",
     "Commented & to be Resubmitted",
     "Rejected & to be Resubmitted",
   ]);
-  // group by document number primarily, fallback to correspondence number
-  const grouped = new Map();
-  docRows.forEach((r) => {
-    const bucket = r.bucket || deriveBucket(r);
-    if (!targetStatuses.has(bucket)) return;
-    const key = r.documentNumber || `corr:${r.correspondenceNumber}`;
-    if (!key) return;
-    const date =
-      r.dateIssued ||
-      r.finalReviewDate ||
-      r.completedDate ||
-      r.correspondenceCreated ||
-      r.dueDate ||
-      r.bestDate;
-    const g = grouped.get(key) || { rows: [] };
-    g.rows.push({ row: r, date });
-    grouped.set(key, g);
-  });
+  // doc keys we need to surface (based on target statuses)
+  const neededKeys = new Set(
+    targetDocs
+      .filter((r) => targetStatuses.has(r.bucket || deriveBucket(r)))
+      .map((r) => r.documentNumber || `corr:${r.correspondenceNumber}`)
+      .filter(Boolean)
+  );
+  if (!neededKeys.size) return { columns: [], rows: [] };
 
   const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const results = [];
   let maxLetters = 0;
+  const rows = [];
 
-  grouped.forEach((g) => {
-    g.rows.sort((a, b) => {
-      if (!a.date && !b.date) return 0;
-      if (!a.date) return 1;
-      if (!b.date) return -1;
-      return a.date - b.date;
+  neededKeys.forEach((key) => {
+    const history = historyDocs.filter((r) => {
+      const k = r.documentNumber || `corr:${r.correspondenceNumber}`;
+      return k === key;
     });
-    const seenDates = new Set();
+    if (!history.length) return;
+
+    // sort by best available date; missing dates go last
+    const sorted = history
+      .map((r) => {
+        const date =
+          r.dateIssued ||
+          r.finalReviewDate ||
+          r.completedDate ||
+          r.correspondenceCreated ||
+          r.dueDate ||
+          r.bestDate;
+        return { row: r, date };
+      })
+      .sort((a, b) => {
+        if (!a.date && !b.date) return 0;
+        if (!a.date) return 1;
+        if (!b.date) return -1;
+        return a.date - b.date;
+      });
+
+    // assign letters strictly in chronological order (no gaps)
     const letterMap = new Map();
-    g.rows.forEach((entry) => {
-      const dKey = entry.date ? entry.date.getTime() : `idx-${letterMap.size}`;
-      if (seenDates.has(dKey)) return;
-      seenDates.add(dKey);
-      const letter = letters[letterMap.size] || `R${letterMap.size}`;
+    sorted.forEach((entry, idx) => {
+      const letter = letters[idx] || `R${idx}`;
       letterMap.set(letter, entry);
     });
     maxLetters = Math.max(maxLetters, letterMap.size);
-    const latestEntry = Array.from(letterMap.values()).slice(-1)[0] || g.rows.slice(-1)[0];
-    const base = latestEntry?.row || {};
+
+    const targetRows = targetDocs.filter((r) => {
+      const k = r.documentNumber || `corr:${r.correspondenceNumber}`;
+      return k === key && targetStatuses.has(r.bucket || deriveBucket(r));
+    });
+    // pick latest target for status/metadata
+    const base =
+      targetRows
+        .map((r) => ({
+          r,
+          date:
+            r.dateIssued ||
+            r.finalReviewDate ||
+            r.completedDate ||
+            r.correspondenceCreated ||
+            r.dueDate ||
+            r.bestDate,
+        }))
+        .sort((a, b) => {
+          if (!a.date && !b.date) return 0;
+          if (!a.date) return 1;
+          if (!b.date) return -1;
+          return a.date - b.date;
+        })
+        .slice(-1)[0]?.r || targetRows[0] || history.slice(-1)[0].row;
+
     const revDates = {};
     letterMap.forEach((entry, letter) => {
       revDates[letter] = entry.date || null;
     });
-    results.push({
-      base,
+
+    const flags = inferPhaseFlags(base.issueReasonText || base.issueReason);
+    const recips = base.recipients.length ? base.recipients.join(", ") : base.recipientRaw;
+    rows.push({
+      index: rows.length + 1,
+      discipline: base.disciplineCode || base.discipline || "",
+      ifcFlag: flags.ifc ? "X" : "",
+      documentNumber: base.documentNumber || "",
+      title: base.title || "",
+      currentRevision: base.revision || Array.from(letterMap.keys()).slice(-1)[0] || "",
+      category: base.issueReasonText || base.issueReason || "",
       revDates,
-      letters: Array.from(letterMap.keys()),
-      currentLetter: Array.from(letterMap.keys()).slice(-1)[0] || "",
+      correspondenceNumber: base.correspondenceNumber || "",
+      status: base.bucket || deriveBucket(base),
+      dueDate: base.dueDate,
+      completedDate: base.completedDate || base.finalReviewDate,
+      remark: base.finalReviewComments || "",
+      flags,
+      recipients: recips || "",
     });
   });
 
-  const letterColumns = Array.from({ length: maxLetters }, (_, i) => letters[i] || `R${i}`);
-  const rows = results
-    .sort((a, b) => (a.base.documentNumber || "").localeCompare(b.base.documentNumber || ""))
-    .map((r, idx) => {
-      const flags = inferPhaseFlags(r.base.issueReasonText || r.base.issueReason);
-      const recips = r.base.recipients.length ? r.base.recipients.join(", ") : r.base.recipientRaw;
-      return {
-        index: idx + 1,
-        discipline: r.base.disciplineCode || r.base.discipline || "",
-        ifcFlag: flags.ifc ? "X" : "",
-        documentNumber: r.base.documentNumber || "",
-        title: r.base.title || "",
-        currentRevision: r.currentLetter || r.base.revision || "",
-        category: r.base.issueReasonText || r.base.issueReason || "",
-        revDates: letterColumns.reduce((acc, letter) => {
-          acc[letter] = r.revDates[letter] || null;
-          return acc;
-        }, {}),
-        correspondenceNumber: r.base.correspondenceNumber || "",
-        status: r.base.bucket || deriveBucket(r.base),
-        dueDate: r.base.dueDate,
-        completedDate: r.base.completedDate || r.base.finalReviewDate,
-        remark: r.base.finalReviewComments || "",
-        flags,
-        recipients: recips || "",
-      };
-    });
+  rows.sort((a, b) => (a.documentNumber || "").localeCompare(b.documentNumber || ""));
+  rows.forEach((r, i) => (r.index = i + 1));
 
+  const letterColumns = Array.from({ length: maxLetters }, (_, i) => letters[i] || `R${i}`);
   return { columns: letterColumns, rows };
 }
 
@@ -587,11 +610,12 @@ function renderAll() {
   const filteredAll = applyFilters(rows);
   const docRows = rows.filter((r) => r.documentNumber);
   const filteredDocs = applyFilters(docRows);
+  const filteredDocsNoStatus = applyFilters(docRows, { ignoreStatus: true });
   const latestDocs = latestPerDocument(filteredDocs);
 
   const disciplineData = computeDisciplineData(latestDocs);
   const revisionData = computeRevisionData(filteredDocs);
-  const letteredData = computeLetteredOpen(filteredDocs);
+  const letteredData = computeLetteredOpen(filteredDocs, filteredDocsNoStatus);
   const statusDataset = buildStatusDataset(latestDocs);
   const disciplineDataset = buildDisciplineDataset(latestDocs);
 

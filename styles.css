@@ -200,6 +200,14 @@ h1 {
   max-height: 500px;
 }
 
+.table-wrap.max-350 {
+  max-height: 350px;
+}
+
+.table-wrap.max-300 {
+  max-height: 300px;
+}
+
 .table-wrap.two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;

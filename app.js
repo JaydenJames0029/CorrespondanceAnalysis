@@ -501,7 +501,7 @@ function computeLetteredOpen(targetDocs, historyDocs) {
   const neededKeys = new Set(
     targetDocs
       .filter((r) => targetStatuses.has(r.bucket || deriveBucket(r)))
-      .map((r) => r.documentNumber || `corr:${r.correspondenceNumber}`)
+      .map((r) => r.documentNumber)
       .filter(Boolean)
   );
   if (!neededKeys.size) return { columns: [], rows: [] };
@@ -512,8 +512,8 @@ function computeLetteredOpen(targetDocs, historyDocs) {
 
   neededKeys.forEach((key) => {
     const history = historyDocs.filter((r) => {
-      const k = r.documentNumber || `corr:${r.correspondenceNumber}`;
-      return k === key;
+      const k = r.documentNumber;
+      return k && k === key;
     });
     if (!history.length) return;
 
@@ -545,8 +545,8 @@ function computeLetteredOpen(targetDocs, historyDocs) {
     maxLetters = Math.max(maxLetters, letterMap.size);
 
     const targetRows = targetDocs.filter((r) => {
-      const k = r.documentNumber || `corr:${r.correspondenceNumber}`;
-      return k === key && targetStatuses.has(r.bucket || deriveBucket(r));
+      const k = r.documentNumber;
+      return k && k === key && targetStatuses.has(r.bucket || deriveBucket(r));
     });
     // pick latest target for status/metadata
     const base =
@@ -600,8 +600,33 @@ function computeLetteredOpen(targetDocs, historyDocs) {
   rows.sort((a, b) => (a.documentNumber || "").localeCompare(b.documentNumber || ""));
   rows.forEach((r, i) => (r.index = i + 1));
 
-  const letterColumns = Array.from({ length: maxLetters }, (_, i) => letters[i] || `R${i}`);
+  // Recompute max letters based on kept rows; cap to a reasonable width.
+  const maxLettersFinal = rows.reduce(
+    (m, r) => Math.max(m, Object.keys(r.revDates || {}).length),
+    0
+  );
+  const capped = Math.min(maxLettersFinal, 12);
+  const letterColumns = Array.from({ length: capped }, (_, i) => letters[i] || `R${i}`);
+  // Trim revDates to capped columns
+  rows.forEach((r) => {
+    const trimmed = {};
+    letterColumns.forEach((l) => {
+      trimmed[l] = r.revDates[l] || null;
+    });
+    r.revDates = trimmed;
+  });
+
   return { columns: letterColumns, rows };
+}
+
+function computeOverdue(docRows) {
+  const today = new Date();
+  return docRows.filter((r) => {
+    const bucket = r.bucket || deriveBucket(r);
+    if (bucket !== "Under Review") return false;
+    const due = r.dueDate;
+    return due && due < today;
+  });
 }
 
 function renderAll() {
@@ -617,6 +642,7 @@ function renderAll() {
   const letteredData = computeLetteredOpen(filteredDocs, filteredDocsNoStatus);
   const statusDataset = buildStatusDataset(latestDocs);
   const disciplineDataset = buildDisciplineDataset(latestDocs);
+  const overdueRows = computeOverdue(filteredDocs);
 
   state.view = {
     filteredAll,
@@ -627,12 +653,14 @@ function renderAll() {
     letteredData,
     statusDataset,
     disciplineDataset,
+    overdueRows,
   };
 
   renderStats(rows, latestDocs, filteredDocs);
   renderDisciplineTables(disciplineData);
   renderRevisionTable(revisionData);
   renderLetteredOpenTable(letteredData);
+  renderOverdueTable(overdueRows);
   renderRecordsTable(filteredAll);
   renderCharts(statusDataset, disciplineDataset);
 }
@@ -666,6 +694,52 @@ function renderStats(allRows, latestDocs, filteredDocs) {
     overdue.length.toLocaleString();
   document.getElementById("overdue-sub").textContent =
     "response due date passed";
+}
+
+function renderOverdueTable(rows) {
+  const table = document.getElementById("overdue-table");
+  if (!table) return;
+  if (!rows.length) {
+    table.innerHTML = "<tbody><tr><td>No overdue items in the selected filters.</td></tr></tbody>";
+    return;
+  }
+  const head =
+    "<thead><tr>" +
+    [
+      "Document number",
+      "Correspondence no.",
+      "Title",
+      "Discipline",
+      "Originating company",
+      "Recipients",
+      "Status",
+      "Due date",
+      "Days overdue",
+    ]
+      .map((h) => `<th>${h}</th>`)
+      .join("") +
+    "</tr></thead>";
+  const today = new Date();
+  const body = rows
+    .map((r) => {
+      const recipients = r.recipients.length
+        ? r.recipients.join(", ")
+        : r.recipientRaw;
+      const days = r.dueDate ? Math.max(0, Math.round((today - r.dueDate) / (1000 * 60 * 60 * 24))) : "";
+      return `<tr>
+        <td>${r.documentNumber || ""}</td>
+        <td>${r.correspondenceNumber || ""}</td>
+        <td>${r.title || ""}</td>
+        <td>${r.disciplineCode || r.discipline || ""}</td>
+        <td>${r.originatingCompany || ""}</td>
+        <td>${recipients || ""}</td>
+        <td>${r.status || ""}</td>
+        <td>${formatDate(r.dueDate)}</td>
+        <td>${days}</td>
+      </tr>`;
+    })
+    .join("");
+  table.innerHTML = `${head}<tbody>${body}</tbody>`;
 }
 
 function renderDisciplineTables(data) {
@@ -1118,6 +1192,26 @@ function exportToExcel() {
     openRows.push(obj);
   });
 
+  const overdueRows = [];
+  (view.overdueRows || []).forEach((r) => {
+    const recips = Array.isArray(r.recipients) ? r.recipients : [];
+    const days =
+      r.dueDate && r.dueDate instanceof Date
+        ? Math.max(0, Math.round((new Date() - r.dueDate) / (1000 * 60 * 60 * 24)))
+        : "";
+    overdueRows.push({
+      "Document number": r.documentNumber || "",
+      "Correspondence no.": r.correspondenceNumber || "",
+      Title: r.title || "",
+      Discipline: r.disciplineCode || r.discipline || "",
+      "Originating company": r.originatingCompany || "",
+      Recipients: recips.length ? recips.join(", ") : r.recipientRaw || "",
+      Status: r.status || "",
+      "Due date": r.dueDate || "",
+      "Days overdue": days,
+    });
+  });
+
   const chartRows = [];
   const statusDataset = view.statusDataset || { labels: [], rawLabels: [], percentages: [], datasets: [] };
   const disciplineDataset = view.disciplineDataset || { labels: [], datasets: [] };
@@ -1147,6 +1241,7 @@ function exportToExcel() {
   addSheet("Status Pivot", pivotRows);
   addSheet("Revision Timeline", revisionRows);
   addSheet("Open Reviews", openRows);
+  addSheet("Overdue", overdueRows);
   addSheet("Latest Documents", view.latestDocs.map(recordRow));
   addSheet("Filtered Rows", view.filteredAll.map(recordRow));
   addSheet("Chart Data", chartRows);

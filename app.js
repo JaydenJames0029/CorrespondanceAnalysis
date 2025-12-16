@@ -21,8 +21,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const fileInput = document.getElementById("file-input");
   const clearBtn = document.getElementById("clear-btn");
   const exportBtn = document.getElementById("export-btn");
+  const clearFiltersBtn = document.getElementById("clear-filters-btn");
   fileInput.addEventListener("change", onFilesSelected);
   clearBtn.addEventListener("click", resetFilters);
+  if (clearFiltersBtn) clearFiltersBtn.addEventListener("click", resetFilters);
   exportBtn.addEventListener("click", exportToExcel);
   document
     .querySelectorAll(".filter select, .filter input")
@@ -398,6 +400,30 @@ function latestPerDocument(rows) {
   return Array.from(map.values());
 }
 
+function latestPerDocumentStrict(rows) {
+  const map = new Map();
+  rows.forEach((r) => {
+    const key = r.documentNumber;
+    if (!key) return;
+    const date =
+      r.dateIssued ||
+      r.finalReviewDate ||
+      r.completedDate ||
+      r.correspondenceCreated ||
+      r.dueDate ||
+      r.bestDate;
+    const current = map.get(key);
+    if (!current) {
+      map.set(key, { ...r, latestDate: date });
+      return;
+    }
+    if (date && (!current.latestDate || date > current.latestDate)) {
+      map.set(key, { ...r, latestDate: date });
+    }
+  });
+  return Array.from(map.values());
+}
+
 function computeDisciplineData(latestDocs) {
   const totals = {};
   latestDocs.forEach((r) => {
@@ -620,8 +646,9 @@ function computeLetteredOpen(targetDocs, historyDocs) {
 }
 
 function computeOverdue(docRows) {
+  const latestDocs = latestPerDocumentStrict(docRows);
   const today = new Date();
-  return docRows.filter((r) => {
+  return latestDocs.filter((r) => {
     const bucket = r.bucket || deriveBucket(r);
     if (bucket !== "Under Review") return false;
     const due = r.dueDate;

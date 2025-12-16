@@ -5,23 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Correspondence Analysis</title>
   <link rel="stylesheet" href="styles.css">
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.20.1/dist/xlsx.full.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="vendor/chart.umd.min.js"></script>
 </head>
 <body>
   <header class="hero">
     <div>
       <p class="eyebrow">Weisen-U</p>
       <h1>Correspondence Analysis</h1>
-      <p class="lede">Upload the query (6) and query (7) workbooks, pick the companies and disciplines you care about, and the site will recreate the deliverable summaries, revision tables, and charts.</p>
+      <p class="lede">Upload the latest query workbook, pick the companies and disciplines you care about, and the site will recreate the deliverable-style summaries, revision tables, and charts.</p>
       <div class="cta-row">
         <label class="file-button">
-          <input id="file-input" type="file" accept=".xlsx,.xls" multiple>
-          <span>Upload Excel</span>
+          <input id="file-input" type="file" accept=".xlsx,.xls">
+          <span>Upload query</span>
         </label>
         <button id="clear-btn" class="ghost">Reset filters</button>
+        <button id="export-btn" class="ghost">Export view to Excel</button>
       </div>
-      <p class="hint">Tip: select both query (6) and query (7) to unlock revision timelines and verdict summaries.</p>
+      <p class="hint">Tip: the site adapts to the columns present in the uploaded query and dedupes to the latest revision per document.</p>
     </div>
   </header>
 

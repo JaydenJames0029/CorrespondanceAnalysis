@@ -1,6 +1,7 @@
 const state = {
   rows: [],
   charts: {},
+  view: {},
 };
 
 const bucketOrder = [
@@ -19,8 +20,10 @@ const bucketOrder = [
 document.addEventListener("DOMContentLoaded", () => {
   const fileInput = document.getElementById("file-input");
   const clearBtn = document.getElementById("clear-btn");
+  const exportBtn = document.getElementById("export-btn");
   fileInput.addEventListener("change", onFilesSelected);
   clearBtn.addEventListener("click", resetFilters);
+  exportBtn.addEventListener("click", exportToExcel);
   document
     .querySelectorAll(".filter select, .filter input")
     .forEach((el) => {
@@ -60,7 +63,8 @@ async function onFilesSelected(evt) {
   }
 
   state.rows = allRows;
-  document.getElementById("file-meta").textContent = `${files.length} file(s) loaded • ${allRows.length} rows`;
+  const names = files.map((f) => f.name).join(", ");
+  document.getElementById("file-meta").textContent = `${files.length} file(s): ${names} • ${allRows.length} rows`;
   populateFilters(allRows);
   renderAll();
 }
@@ -389,49 +393,7 @@ function latestPerDocument(rows) {
   return Array.from(map.values());
 }
 
-function renderAll() {
-  const rows = state.rows || [];
-  const filteredAll = applyFilters(rows);
-  const docRows = rows.filter((r) => r.documentNumber);
-  const filteredDocs = applyFilters(docRows);
-  const latestDocs = latestPerDocument(filteredDocs);
-
-  renderStats(rows, latestDocs, filteredDocs);
-  renderDisciplineTables(latestDocs);
-  renderRevisionTable(filteredDocs);
-  renderRecordsTable(filteredAll);
-  renderCharts(latestDocs);
-}
-
-function renderStats(allRows, latestDocs, filteredDocs) {
-  document.getElementById("rows-loaded").textContent = allRows.length.toLocaleString();
-  document.getElementById("rows-loaded-sub").textContent =
-    "documents + correspondences";
-  document.getElementById("doc-count").textContent =
-    latestDocs.length.toLocaleString();
-  document.getElementById("doc-count-sub").textContent =
-    "latest revision per document";
-  const underReview = latestDocs.filter(
-    (r) => (r.bucket || deriveBucket(r)) === "Under Review"
-  );
-  document.getElementById("under-review").textContent =
-    underReview.length.toLocaleString();
-  document.getElementById("under-review-sub").textContent =
-    "open reviews (latest per document)";
-  const today = new Date();
-  const overdue = filteredDocs.filter((r) => {
-    const bucket = r.bucket || deriveBucket(r);
-    if (bucket !== "Under Review") return false;
-    const due = r.dueDate;
-    return due && due < today;
-  });
-  document.getElementById("overdue-count").textContent =
-    overdue.length.toLocaleString();
-  document.getElementById("overdue-sub").textContent =
-    "response due date passed";
-}
-
-function renderDisciplineTables(latestDocs) {
+function computeDisciplineData(latestDocs) {
   const totals = {};
   latestDocs.forEach((r) => {
     const disc = r.disciplineCode || r.discipline || "Unspecified";
@@ -441,21 +403,6 @@ function renderDisciplineTables(latestDocs) {
       totals[disc].issued += 1;
     }
   });
-  const discKeys = Object.keys(totals).sort();
-  const totalsTable = document.getElementById("discipline-totals");
-  totalsTable.innerHTML = "";
-  const totalsHead = `<thead><tr><th>Discipline</th><th>Total drawings/documents</th><th>Total issued</th></tr></thead>`;
-  const totalsBody = discKeys
-    .map(
-      (d) =>
-        `<tr><td>${d}</td><td>${totals[d].total}</td><td>${totals[d].issued}</td></tr>`
-    )
-    .join("");
-  const totalsFooter = `<tr><th>Grand total</th><th>${discKeys.reduce(
-    (s, d) => s + totals[d].total,
-    0
-  )}</th><th>${discKeys.reduce((s, d) => s + totals[d].issued, 0)}</th></tr>`;
-  totalsTable.innerHTML = `${totalsHead}<tbody>${totalsBody}${totalsFooter}</tbody>`;
 
   const pivot = {};
   latestDocs.forEach((r) => {
@@ -464,46 +411,12 @@ function renderDisciplineTables(latestDocs) {
     if (!pivot[bucket]) pivot[bucket] = {};
     pivot[bucket][disc] = (pivot[bucket][disc] || 0) + 1;
   });
-  const pivotTable = document.getElementById("status-pivot");
-  const disciplines = Array.from(
-    new Set(
-      latestDocs.map((r) => r.disciplineCode || r.discipline || "Unspecified")
-    )
-  ).sort();
-  const header = `<thead><tr><th>Status</th>${disciplines
-    .map((d) => `<th>${d}</th>`)
-    .join("")}<th>Grand total</th></tr></thead>`;
-  const body = bucketOrder
-    .filter((b) => pivot[b])
-    .map((bucket) => {
-      const rowTotal = disciplines.reduce(
-        (sum, d) => sum + (pivot[bucket][d] || 0),
-        0
-      );
-      return `<tr><td>${bucket}</td>${disciplines
-        .map((d) => `<td>${pivot[bucket][d] || 0}</td>`)
-        .join("")}<td>${rowTotal}</td></tr>`;
-    })
-    .join("");
-  const grandTotals = disciplines.reduce((acc, d) => {
-    acc[d] = bucketOrder.reduce(
-      (sum, b) => sum + (pivot[b]?.[d] || 0),
-      0
-    );
-    return acc;
-  }, {});
-  const grandTotalRow = `<tr><th>Grand total</th>${disciplines
-    .map((d) => `<th>${grandTotals[d]}</th>`)
-    .join("")}<th>${bucketOrder.reduce(
-    (sum, b) =>
-      sum +
-      disciplines.reduce((inner, d) => inner + (pivot[b]?.[d] || 0), 0),
-    0
-  )}</th></tr>`;
-  pivotTable.innerHTML = `${header}<tbody>${body}${grandTotalRow}</tbody>`;
+
+  const disciplines = Object.keys(totals).sort();
+  return { totals, pivot, disciplines };
 }
 
-function renderRevisionTable(docRows) {
+function computeRevisionData(docRows) {
   const targetStatuses = new Set([
     "Under Review",
     "Commented & to be Resubmitted",
@@ -539,19 +452,6 @@ function renderRevisionTable(docRows) {
   const allRevs = new Set();
   grouped.forEach((g) => g.revisions.forEach((_, rev) => allRevs.add(rev)));
   const revColumns = Array.from(allRevs).sort(sortRevision);
-  const table = document.getElementById("revision-table");
-  if (!grouped.size) {
-    table.innerHTML = "<tbody><tr><td>No rows in the selected filters.</td></tr></tbody>";
-    return;
-  }
-  const head =
-    "<thead><tr>" +
-    ["Document", "Title", "Discipline", "Originating company", "Recipients", "Status", "Due date", "Current rev"]
-      .map((h) => `<th>${h}</th>`)
-      .join("") +
-    revColumns.map((r) => `<th>${r}</th>`).join("") +
-    "</tr></thead>";
-
   const rows = Array.from(grouped.values())
     .sort((a, b) => (a.base.documentNumber || "").localeCompare(b.base.documentNumber || ""))
     .map((g) => {
@@ -560,27 +460,172 @@ function renderRevisionTable(docRows) {
       const recipients = base.recipients.length
         ? base.recipients.join(", ")
         : base.recipientRaw;
+      const revDates = {};
+      revColumns.forEach((rev) => {
+        const info = g.revisions.get(rev);
+        revDates[rev] = info?.date || null;
+      });
+      return {
+        documentNumber: base.documentNumber,
+        title: base.title,
+        discipline: base.disciplineCode || base.discipline || "",
+        originatingCompany: base.originatingCompany,
+        recipients,
+        status: base.bucket,
+        dueDate: base.dueDate,
+        currentRev: latest.rev || "",
+        revisions: revDates,
+      };
+    });
+
+  return { columns: revColumns, rows };
+}
+
+function renderAll() {
+  const rows = state.rows || [];
+  const filteredAll = applyFilters(rows);
+  const docRows = rows.filter((r) => r.documentNumber);
+  const filteredDocs = applyFilters(docRows);
+  const latestDocs = latestPerDocument(filteredDocs);
+
+  const disciplineData = computeDisciplineData(latestDocs);
+  const revisionData = computeRevisionData(filteredDocs);
+  const statusDataset = buildStatusDataset(latestDocs);
+  const disciplineDataset = buildDisciplineDataset(latestDocs);
+
+  state.view = {
+    filteredAll,
+    filteredDocs,
+    latestDocs,
+    disciplineData,
+    revisionData,
+    statusDataset,
+    disciplineDataset,
+  };
+
+  renderStats(rows, latestDocs, filteredDocs);
+  renderDisciplineTables(disciplineData);
+  renderRevisionTable(revisionData);
+  renderRecordsTable(filteredAll);
+  renderCharts(statusDataset, disciplineDataset);
+}
+
+function renderStats(allRows, latestDocs, filteredDocs) {
+  document.getElementById("rows-loaded").textContent = allRows.length.toLocaleString();
+  document.getElementById("rows-loaded-sub").textContent =
+    "documents + correspondences";
+  document.getElementById("doc-count").textContent =
+    latestDocs.length.toLocaleString();
+  document.getElementById("doc-count-sub").textContent =
+    "latest revision per document";
+  const underReview = latestDocs.filter(
+    (r) => (r.bucket || deriveBucket(r)) === "Under Review"
+  );
+  document.getElementById("under-review").textContent =
+    underReview.length.toLocaleString();
+  document.getElementById("under-review-sub").textContent =
+    "open reviews (latest per document)";
+  const today = new Date();
+  const overdue = filteredDocs.filter((r) => {
+    const bucket = r.bucket || deriveBucket(r);
+    if (bucket !== "Under Review") return false;
+    const due = r.dueDate;
+    return due && due < today;
+  });
+  document.getElementById("overdue-count").textContent =
+    overdue.length.toLocaleString();
+  document.getElementById("overdue-sub").textContent =
+    "response due date passed";
+}
+
+function renderDisciplineTables(data) {
+  const { totals, pivot, disciplines } = data;
+  const discKeys = disciplines.length ? disciplines : Object.keys(totals).sort();
+  const totalsTable = document.getElementById("discipline-totals");
+  totalsTable.innerHTML = "";
+  const totalsHead = `<thead><tr><th>Discipline</th><th>Total drawings/documents</th><th>Total issued</th></tr></thead>`;
+  const totalsBody = discKeys
+    .map(
+      (d) =>
+        `<tr><td>${d}</td><td>${totals[d]?.total || 0}</td><td>${totals[d]?.issued || 0}</td></tr>`
+    )
+    .join("");
+  const totalsFooter = `<tr><th>Grand total</th><th>${discKeys.reduce(
+    (s, d) => s + (totals[d]?.total || 0),
+    0
+  )}</th><th>${discKeys.reduce((s, d) => s + (totals[d]?.issued || 0), 0)}</th></tr>`;
+  totalsTable.innerHTML = `${totalsHead}<tbody>${totalsBody}${totalsFooter}</tbody>`;
+
+  const pivotTable = document.getElementById("status-pivot");
+  const header = `<thead><tr><th>Status</th>${disciplines
+    .map((d) => `<th>${d}</th>`)
+    .join("")}<th>Grand total</th></tr></thead>`;
+  const body = bucketOrder
+    .filter((b) => pivot[b])
+    .map((bucket) => {
+      const rowTotal = disciplines.reduce(
+        (sum, d) => sum + (pivot[bucket]?.[d] || 0),
+        0
+      );
+      return `<tr><td>${bucket}</td>${disciplines
+        .map((d) => `<td>${pivot[bucket]?.[d] || 0}</td>`)
+        .join("")}<td>${rowTotal}</td></tr>`;
+    })
+    .join("");
+  const grandTotals = disciplines.reduce((acc, d) => {
+    acc[d] = bucketOrder.reduce(
+      (sum, b) => sum + (pivot[b]?.[d] || 0),
+      0
+    );
+    return acc;
+  }, {});
+  const grandTotalRow = `<tr><th>Grand total</th>${disciplines
+    .map((d) => `<th>${grandTotals[d] || 0}</th>`)
+    .join("")}<th>${bucketOrder.reduce(
+    (sum, b) =>
+      sum +
+      disciplines.reduce((inner, d) => inner + (pivot[b]?.[d] || 0), 0),
+    0
+  )}</th></tr>`;
+  pivotTable.innerHTML = `${header}<tbody>${body}${grandTotalRow}</tbody>`;
+}
+
+function renderRevisionTable(revisionData) {
+  const table = document.getElementById("revision-table");
+  if (!revisionData.rows.length) {
+    table.innerHTML = "<tbody><tr><td>No rows in the selected filters.</td></tr></tbody>";
+    return;
+  }
+  const revColumns = revisionData.columns;
+  const head =
+    "<thead><tr>" +
+    ["Document", "Title", "Discipline", "Originating company", "Recipients", "Status", "Due date", "Current rev"]
+      .map((h) => `<th>${h}</th>`)
+      .join("") +
+    revColumns.map((r) => `<th>${r}</th>`).join("") +
+    "</tr></thead>";
+
+  const rows = revisionData.rows
+    .map((row) => {
       const dueCell =
-        base.bucket === "Under Review" && base.dueDate && base.dueDate < new Date()
-          ? `<span class="danger">${formatDate(base.dueDate)}</span>`
-          : formatDate(base.dueDate);
+        row.status === "Under Review" && row.dueDate && row.dueDate < new Date()
+          ? `<span class="danger">${formatDate(row.dueDate)}</span>`
+          : formatDate(row.dueDate);
       const revCells = revColumns
         .map((rev) => {
-          const info = g.revisions.get(rev);
-          if (!info) return "<td></td>";
-          const text = info.date ? formatDate(info.date) : "";
-          return `<td>${text}</td>`;
+          const date = row.revisions[rev];
+          return `<td>${date ? formatDate(date) : ""}</td>`;
         })
         .join("");
       return `<tr>
-        <td>${base.documentNumber}</td>
-        <td>${base.title}</td>
-        <td><span class="pill">${base.disciplineCode || base.discipline || ""}</span></td>
-        <td>${base.originatingCompany}</td>
-        <td>${recipients || ""}</td>
-        <td>${base.bucket}</td>
+        <td>${row.documentNumber}</td>
+        <td>${row.title}</td>
+        <td><span class="pill">${row.discipline}</span></td>
+        <td>${row.originatingCompany || ""}</td>
+        <td>${row.recipients || ""}</td>
+        <td>${row.status}</td>
         <td>${dueCell}</td>
-        <td>${latest.rev || ""}</td>
+        <td>${row.currentRev}</td>
         ${revCells}
       </tr>`;
     })
@@ -643,17 +688,12 @@ function renderRecordsTable(rows) {
   table.innerHTML = `${head}<tbody>${body}</tbody>`;
 }
 
-function renderCharts(latestDocs) {
-  renderChart(
-    "status-chart",
-    "pie",
-    buildStatusDataset(latestDocs),
-    "Status distribution"
-  );
+function renderCharts(statusDataset, disciplineDataset) {
+  renderChart("status-chart", "pie", statusDataset, "Status distribution");
   renderChart(
     "discipline-chart",
     "doughnut",
-    buildDisciplineDataset(latestDocs),
+    disciplineDataset,
     "Discipline mix"
   );
 }
@@ -721,6 +761,149 @@ function renderChart(id, type, data, label) {
       },
     },
   });
+}
+
+function exportToExcel() {
+  if (typeof XLSX === "undefined") {
+    alert("SheetJS (XLSX) is not loaded.");
+    return;
+  }
+  const view = state.view || {};
+  if (!view.filteredAll || !view.filteredAll.length) {
+    alert("Upload a query and wait for data to load before exporting.");
+    return;
+  }
+
+  const wb = XLSX.utils.book_new();
+  const addSheet = (name, rows) => {
+    const safeName = name.slice(0, 31);
+    const ws = XLSX.utils.json_to_sheet(rows && rows.length ? rows : [{ Notice: "No data" }]);
+    XLSX.utils.book_append_sheet(wb, ws, safeName);
+  };
+
+  const recordRow = (r) => {
+    const recips = Array.isArray(r.recipients) ? r.recipients : [];
+    return {
+      "Document number": r.documentNumber || "",
+      "Correspondence no.": r.correspondenceNumber || "",
+      Title: r.title || "",
+      Discipline: r.disciplineCode || r.discipline || "",
+      "Originating company": r.originatingCompany || "",
+      Recipients: recips.length ? recips.join(", ") : r.recipientRaw || "",
+      Status: r.status || "",
+      "Status bucket": r.bucket || deriveBucket(r),
+      "Final verdict": r.verdict || "",
+      Revision: r.revision || "",
+      "Date issued": r.dateIssued || "",
+      "Due date": r.dueDate || "",
+      "Final review date": r.finalReviewDate || "",
+      "Completed date": r.completedDate || "",
+      "Created date": r.correspondenceCreated || "",
+      "Issue reason": r.issueReason || "",
+      "Issue reason text": r.issueReasonText || "",
+      "Work package": r.workPackage || "",
+      Type: r.correspondenceType || "",
+      "Source file": r.sourceFile || "",
+    };
+  };
+
+  const statsRows = [
+    { Metric: "Rows loaded (all sheets)", Value: state.rows.length },
+    { Metric: "Filtered rows (all)", Value: view.filteredAll.length },
+    { Metric: "Documents with revisions (filtered)", Value: view.filteredDocs?.length || 0 },
+    { Metric: "Unique documents (latest)", Value: view.latestDocs?.length || 0 },
+  ];
+
+  const disciplineRows = [];
+  const totals = view.disciplineData?.totals || {};
+  Object.keys(totals)
+    .sort()
+    .forEach((disc) => {
+      disciplineRows.push({
+        Discipline: disc,
+        "Total drawings/documents": totals[disc]?.total || 0,
+        "Total issued": totals[disc]?.issued || 0,
+      });
+    });
+  disciplineRows.push({
+    Discipline: "Grand total",
+    "Total drawings/documents": disciplineRows.reduce((s, r) => s + (r["Total drawings/documents"] || 0), 0),
+    "Total issued": disciplineRows.reduce((s, r) => s + (r["Total issued"] || 0), 0),
+  });
+
+  const pivotRows = [];
+  const disciplines = view.disciplineData?.disciplines || [];
+  const pivot = view.disciplineData?.pivot || {};
+  bucketOrder
+    .filter((b) => pivot[b])
+    .forEach((bucket) => {
+      const row = { Status: bucket };
+      disciplines.forEach((d) => {
+        row[d] = pivot[b]?.[d] || 0;
+      });
+      row["Row total"] = disciplines.reduce((sum, d) => sum + (pivot[b]?.[d] || 0), 0);
+      pivotRows.push(row);
+    });
+  const grandRow = { Status: "Grand total" };
+  disciplines.forEach((d) => {
+    grandRow[d] = bucketOrder.reduce((sum, b) => sum + (pivot[b]?.[d] || 0), 0);
+  });
+  grandRow["Row total"] = bucketOrder.reduce(
+    (sum, b) => sum + (pivot[b] ? Object.values(pivot[b]).reduce((s, v) => s + v, 0) : 0),
+    0
+  );
+  pivotRows.push(grandRow);
+
+  const revisionRows = [];
+  const revData = view.revisionData || { columns: [], rows: [] };
+  revData.rows.forEach((row) => {
+    const obj = {
+      "Document number": row.documentNumber,
+      Title: row.title,
+      Discipline: row.discipline,
+      "Originating company": row.originatingCompany,
+      Recipients: row.recipients,
+      Status: row.status,
+      "Due date": row.dueDate || "",
+      "Current rev": row.currentRev,
+    };
+    revData.columns.forEach((rev) => {
+      obj[`Rev ${rev}`] = row.revisions[rev] || "";
+    });
+    revisionRows.push(obj);
+  });
+
+  const chartRows = [];
+  const statusDataset = view.statusDataset || { labels: [], datasets: [] };
+  const disciplineDataset = view.disciplineDataset || { labels: [], datasets: [] };
+  if (statusDataset.datasets[0]) {
+    statusDataset.labels.forEach((label, idx) => {
+      chartRows.push({
+        Series: "Status distribution",
+        Label: label,
+        Value: statusDataset.datasets[0].data[idx] || 0,
+      });
+    });
+  }
+  if (disciplineDataset.datasets[0]) {
+    disciplineDataset.labels.forEach((label, idx) => {
+      chartRows.push({
+        Series: "Discipline mix",
+        Label: label,
+        Value: disciplineDataset.datasets[0].data[idx] || 0,
+      });
+    });
+  }
+
+  addSheet("Stats", statsRows);
+  addSheet("Discipline Summary", disciplineRows);
+  addSheet("Status Pivot", pivotRows);
+  addSheet("Revision Timeline", revisionRows);
+  addSheet("Latest Documents", view.latestDocs.map(recordRow));
+  addSheet("Filtered Rows", view.filteredAll.map(recordRow));
+  addSheet("Chart Data", chartRows);
+
+  XLSX.writeFile(wb, "correspondence_analysis.xlsx");
 }
 
 function colorForStatus(status) {

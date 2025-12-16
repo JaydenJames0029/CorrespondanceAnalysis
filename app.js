@@ -106,6 +106,7 @@ function normalizeRow(row, meta) {
   const status = clean(get("Correspondence Status"));
   const issueText = clean(get("Issue Reason Text"));
   const issueReason = clean(get("Issue Reason"));
+  const finalReviewComments = clean(get("Final Review Comments"));
   const dueDate = parseDate(
     get("Calculated Response Due Date") || get("Response Due Date")
   );
@@ -144,6 +145,7 @@ function normalizeRow(row, meta) {
     bucket,
     issueReasonText: issueText,
     issueReason,
+    finalReviewComments,
     correspondenceType: itemType,
     workPackage,
     revision,
@@ -473,12 +475,111 @@ function computeRevisionData(docRows) {
         recipients,
         status: base.bucket,
         dueDate: base.dueDate,
+        correspondenceNumber: base.correspondenceNumber,
         currentRev: latest.rev || "",
+        docRevision: base.revision || "",
+        issueReasonText: base.issueReasonText || "",
+        issueReason: base.issueReason || "",
+        completedDate: base.completedDate || "",
+        finalReviewDate: base.finalReviewDate || "",
+        workPackage: base.workPackage || "",
+        comments: base.finalReviewComments || "",
         revisions: revDates,
       };
     });
 
   return { columns: revColumns, rows };
+}
+
+function computeLetteredOpen(docRows) {
+  const targetStatuses = new Set([
+    "Under Review",
+    "Commented & to be Resubmitted",
+    "Rejected & to be Resubmitted",
+  ]);
+  // group by document number primarily, fallback to correspondence number
+  const grouped = new Map();
+  docRows.forEach((r) => {
+    const bucket = r.bucket || deriveBucket(r);
+    if (!targetStatuses.has(bucket)) return;
+    const key = r.documentNumber || `corr:${r.correspondenceNumber}`;
+    if (!key) return;
+    const date =
+      r.dateIssued ||
+      r.finalReviewDate ||
+      r.completedDate ||
+      r.correspondenceCreated ||
+      r.dueDate ||
+      r.bestDate;
+    const g = grouped.get(key) || { rows: [] };
+    g.rows.push({ row: r, date });
+    grouped.set(key, g);
+  });
+
+  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const results = [];
+  let maxLetters = 0;
+
+  grouped.forEach((g) => {
+    g.rows.sort((a, b) => {
+      if (!a.date && !b.date) return 0;
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return a.date - b.date;
+    });
+    const seenDates = new Set();
+    const letterMap = new Map();
+    g.rows.forEach((entry) => {
+      const dKey = entry.date ? entry.date.getTime() : `idx-${letterMap.size}`;
+      if (seenDates.has(dKey)) return;
+      seenDates.add(dKey);
+      const letter = letters[letterMap.size] || `R${letterMap.size}`;
+      letterMap.set(letter, entry);
+    });
+    maxLetters = Math.max(maxLetters, letterMap.size);
+    const latestEntry = Array.from(letterMap.values()).slice(-1)[0] || g.rows.slice(-1)[0];
+    const base = latestEntry?.row || {};
+    const revDates = {};
+    letterMap.forEach((entry, letter) => {
+      revDates[letter] = entry.date || null;
+    });
+    results.push({
+      base,
+      revDates,
+      letters: Array.from(letterMap.keys()),
+      currentLetter: Array.from(letterMap.keys()).slice(-1)[0] || "",
+    });
+  });
+
+  const letterColumns = Array.from({ length: maxLetters }, (_, i) => letters[i] || `R${i}`);
+  const rows = results
+    .sort((a, b) => (a.base.documentNumber || "").localeCompare(b.base.documentNumber || ""))
+    .map((r, idx) => {
+      const flags = inferPhaseFlags(r.base.issueReasonText || r.base.issueReason);
+      const recips = r.base.recipients.length ? r.base.recipients.join(", ") : r.base.recipientRaw;
+      return {
+        index: idx + 1,
+        discipline: r.base.disciplineCode || r.base.discipline || "",
+        ifcFlag: flags.ifc ? "X" : "",
+        documentNumber: r.base.documentNumber || "",
+        title: r.base.title || "",
+        currentRevision: r.currentLetter || r.base.revision || "",
+        category: r.base.issueReasonText || r.base.issueReason || "",
+        revDates: letterColumns.reduce((acc, letter) => {
+          acc[letter] = r.revDates[letter] || null;
+          return acc;
+        }, {}),
+        correspondenceNumber: r.base.correspondenceNumber || "",
+        status: r.base.bucket || deriveBucket(r.base),
+        dueDate: r.base.dueDate,
+        completedDate: r.base.completedDate || r.base.finalReviewDate,
+        remark: r.base.finalReviewComments || "",
+        flags,
+        recipients: recips || "",
+      };
+    });
+
+  return { columns: letterColumns, rows };
 }
 
 function renderAll() {
@@ -490,6 +591,7 @@ function renderAll() {
 
   const disciplineData = computeDisciplineData(latestDocs);
   const revisionData = computeRevisionData(filteredDocs);
+  const letteredData = computeLetteredOpen(filteredDocs);
   const statusDataset = buildStatusDataset(latestDocs);
   const disciplineDataset = buildDisciplineDataset(latestDocs);
 
@@ -499,6 +601,7 @@ function renderAll() {
     latestDocs,
     disciplineData,
     revisionData,
+    letteredData,
     statusDataset,
     disciplineDataset,
   };
@@ -506,6 +609,7 @@ function renderAll() {
   renderStats(rows, latestDocs, filteredDocs);
   renderDisciplineTables(disciplineData);
   renderRevisionTable(revisionData);
+  renderLetteredOpenTable(letteredData);
   renderRecordsTable(filteredAll);
   renderCharts(statusDataset, disciplineDataset);
 }
@@ -521,10 +625,13 @@ function renderStats(allRows, latestDocs, filteredDocs) {
   const underReview = latestDocs.filter(
     (r) => (r.bucket || deriveBucket(r)) === "Under Review"
   );
+  const underPct = latestDocs.length
+    ? ((underReview.length / latestDocs.length) * 100).toFixed(1)
+    : "0.0";
   document.getElementById("under-review").textContent =
     underReview.length.toLocaleString();
   document.getElementById("under-review-sub").textContent =
-    "open reviews (latest per document)";
+    `open reviews (${underPct}% of docs)`;
   const today = new Date();
   const overdue = filteredDocs.filter((r) => {
     const bucket = r.bucket || deriveBucket(r);
@@ -633,6 +740,84 @@ function renderRevisionTable(revisionData) {
   table.innerHTML = `${head}<tbody>${rows}</tbody>`;
 }
 
+function renderOpenReviewsTable(letteredData) {
+  const table = document.getElementById("open-reviews-table");
+  if (!table) return;
+  if (!letteredData.rows.length) {
+    table.innerHTML = "<tbody><tr><td>No rows in the selected filters.</td></tr></tbody>";
+    return;
+  }
+  const revColumns = letteredData.columns;
+  const head =
+    "<thead><tr>" +
+    [
+      "#",
+      "Discipline",
+      "IFC to be Issued",
+      "Drawing number",
+      "Description",
+      "Current revision",
+      "Category",
+    ]
+      .map((h) => `<th>${h}</th>`)
+      .join("") +
+    revColumns.map((r) => `<th>${r}</th>`).join("") +
+    [
+      "Correspondence no.",
+      "Status",
+      "Due date",
+      "Completed date",
+      "Remark",
+      "BD",
+      "30%",
+      "60%",
+      "90%",
+      "IFC",
+      "Impacted?",
+    ]
+      .map((h) => `<th>${h}</th>`)
+      .join("") +
+    "</tr></thead>";
+
+  const rows = letteredData.rows.map((row) => {
+    const flags = row.flags || inferPhaseFlags(row.category);
+    const revCells = revColumns
+      .map((rev) => {
+        const date = row.revDates[rev];
+        return `<td>${date ? formatDate(date) : ""}</td>`;
+      })
+      .join("");
+    const ifcToBeIssued = flags.ifc ? "X" : "";
+    return `<tr>
+      <td>${row.index}</td>
+      <td>${row.discipline}</td>
+      <td>${ifcToBeIssued}</td>
+      <td>${row.documentNumber || ""}</td>
+      <td>${row.title || ""}</td>
+      <td>${row.currentRevision || ""}</td>
+      <td>${row.category || ""}</td>
+      ${revCells}
+      <td>${row.correspondenceNumber || ""}</td>
+      <td>${row.status}</td>
+      <td>${formatDate(row.dueDate)}</td>
+      <td>${formatDate(row.completedDate)}</td>
+      <td>${row.remark || ""}</td>
+      <td>${flags.bd ? "1" : ""}</td>
+      <td>${flags.thirty ? "1" : ""}</td>
+      <td>${flags.sixty ? "1" : ""}</td>
+      <td>${flags.ninety ? "1" : ""}</td>
+      <td>${flags.ifc ? "1" : ""}</td>
+      <td></td>
+    </tr>`;
+  }).join("");
+  table.innerHTML = `${head}<tbody>${rows}</tbody>`;
+}
+
+function renderLetteredOpenTable(letteredData) {
+  // For now reuse the same table; function exists for clarity/extendability.
+  renderOpenReviewsTable(letteredData);
+}
+
 function renderRecordsTable(rows) {
   const table = document.getElementById("records-table");
   if (!rows.length) {
@@ -705,8 +890,15 @@ function buildStatusDataset(latestDocs) {
     counts[bucket] = (counts[bucket] || 0) + 1;
   });
   const labels = Object.keys(counts);
+  const total = labels.reduce((sum, l) => sum + counts[l], 0) || 1;
+  const percentages = labels.map((l) => (counts[l] / total) * 100);
+  const displayLabels = labels.map(
+    (l, i) => `${l} (${percentages[i].toFixed(1)}%)`
+  );
   return {
-    labels,
+    labels: displayLabels,
+    rawLabels: labels,
+    percentages,
     datasets: [
       {
         label: "Status",
@@ -839,17 +1031,17 @@ function exportToExcel() {
     .forEach((bucket) => {
       const row = { Status: bucket };
       disciplines.forEach((d) => {
-        row[d] = pivot[b]?.[d] || 0;
+        row[d] = pivot[bucket]?.[d] || 0;
       });
-      row["Row total"] = disciplines.reduce((sum, d) => sum + (pivot[b]?.[d] || 0), 0);
+      row["Row total"] = disciplines.reduce((sum, d) => sum + (pivot[bucket]?.[d] || 0), 0);
       pivotRows.push(row);
     });
   const grandRow = { Status: "Grand total" };
   disciplines.forEach((d) => {
-    grandRow[d] = bucketOrder.reduce((sum, b) => sum + (pivot[b]?.[d] || 0), 0);
+    grandRow[d] = bucketOrder.reduce((sum, bucket) => sum + (pivot[bucket]?.[d] || 0), 0);
   });
   grandRow["Row total"] = bucketOrder.reduce(
-    (sum, b) => sum + (pivot[b] ? Object.values(pivot[b]).reduce((s, v) => s + v, 0) : 0),
+    (sum, bucket) => sum + (pivot[bucket] ? Object.values(pivot[bucket]).reduce((s, v) => s + v, 0) : 0),
     0
   );
   pivotRows.push(grandRow);
@@ -873,15 +1065,47 @@ function exportToExcel() {
     revisionRows.push(obj);
   });
 
+  const openRows = [];
+  const letterData = view.letteredData || { columns: [], rows: [] };
+  letterData.rows.forEach((row) => {
+    const flags = row.flags || inferPhaseFlags(row.category);
+    const obj = {
+      "#": row.index,
+      Discipline: row.discipline,
+      "IFC to be Issued": flags.ifc ? "X" : "",
+      "Drawing number": row.documentNumber || "",
+      Description: row.title || "",
+      "Current revision": row.currentRevision || "",
+      Category: row.category || "",
+      "Correspondence no.": row.correspondenceNumber || "",
+      Status: row.status,
+      "Due date": row.dueDate || "",
+      "Completed date": row.completedDate || "",
+      Remark: row.remark || "",
+      BD: flags.bd ? 1 : "",
+      "30%": flags.thirty ? 1 : "",
+      "60%": flags.sixty ? 1 : "",
+      "90%": flags.ninety ? 1 : "",
+      IFC: flags.ifc ? 1 : "",
+      "Impacted?": "",
+    };
+    letterData.columns.forEach((rev) => {
+      obj[`Rev ${rev}`] = row.revDates[rev] || "";
+    });
+    openRows.push(obj);
+  });
+
   const chartRows = [];
-  const statusDataset = view.statusDataset || { labels: [], datasets: [] };
+  const statusDataset = view.statusDataset || { labels: [], rawLabels: [], percentages: [], datasets: [] };
   const disciplineDataset = view.disciplineDataset || { labels: [], datasets: [] };
   if (statusDataset.datasets[0]) {
-    statusDataset.labels.forEach((label, idx) => {
+    const labels = statusDataset.rawLabels && statusDataset.rawLabels.length ? statusDataset.rawLabels : statusDataset.labels;
+    labels.forEach((label, idx) => {
       chartRows.push({
         Series: "Status distribution",
         Label: label,
         Value: statusDataset.datasets[0].data[idx] || 0,
+        Percent: statusDataset.percentages[idx]?.toFixed(1) || "",
       });
     });
   }
@@ -899,11 +1123,23 @@ function exportToExcel() {
   addSheet("Discipline Summary", disciplineRows);
   addSheet("Status Pivot", pivotRows);
   addSheet("Revision Timeline", revisionRows);
+  addSheet("Open Reviews", openRows);
   addSheet("Latest Documents", view.latestDocs.map(recordRow));
   addSheet("Filtered Rows", view.filteredAll.map(recordRow));
   addSheet("Chart Data", chartRows);
 
   XLSX.writeFile(wb, "correspondence_analysis.xlsx");
+}
+
+function inferPhaseFlags(issueText) {
+  const t = (issueText || "").toLowerCase();
+  return {
+    thirty: t.includes("30%"),
+    sixty: t.includes("60%"),
+    ninety: t.includes("90%"),
+    ifc: t.includes("construction") || t.includes("ifc"),
+    bd: t.includes("bd") || t.includes("basic design"),
+  };
 }
 
 function colorForStatus(status) {

@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Correspondence Analysis</title>
   <link rel="stylesheet" href="styles.css">
-  <script src="vendor/xlsx.full.min.js"></script>
-  <script src="vendor/chart.umd.min.js"></script>
+  <!-- CDN first, fallback to local vendor copies to avoid 404s when hosted -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js" onerror="this.onerror=null;this.src='vendor/xlsx.full.min.js';"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js" onerror="this.onerror=null;this.src='vendor/chart.umd.min.js';"></script>
 </head>
 <body>
   <header class="hero">
@@ -140,6 +141,16 @@
 
     <section class="panel">
       <div class="panel-header">
+        <h2>Open reviews & resubmissions</h2>
+        <p class="meta">Documents that are Under Review or flagged for resubmission, with per-revision issue dates.</p>
+      </div>
+      <div class="table-wrap" id="open-table-wrap">
+        <table id="open-reviews-table"></table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
         <h2>Revision timeline (Under Review + Resubmissions)</h2>
         <p class="meta">Shows the latest date for each revision letter; duplicates are collapsed.</p>
       </div>
@@ -149,13 +160,17 @@
     </section>
 
     <section class="panel">
-      <div class="panel-header">
-        <h2>Filtered records</h2>
-        <p class="meta">All rows that match the current filters (documents + correspondences).</p>
-      </div>
-      <div class="table-wrap">
-        <table id="records-table"></table>
-      </div>
+      <details open class="collapsible">
+        <summary>
+          <div class="panel-header">
+            <h2>Filtered records</h2>
+            <p class="meta">All rows that match the current filters (documents + correspondences). Click to collapse.</p>
+          </div>
+        </summary>
+        <div class="table-wrap">
+          <table id="records-table"></table>
+        </div>
+      </details>
     </section>
   </main>
 

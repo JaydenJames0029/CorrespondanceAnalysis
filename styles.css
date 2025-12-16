@@ -256,11 +256,45 @@ tbody tr:hover {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: #12151f;
+  min-height: 220px;
 }
 
 .chart-card p {
   margin: 0 0 8px;
   color: var(--muted);
+}
+
+.chart-card canvas {
+  max-height: 180px;
+}
+
+.table-wrap.collapsible-wrap {
+  margin-top: 8px;
+}
+
+.collapsible summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.collapsible summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible[open] summary h2::after,
+.collapsible:not([open]) summary h2::after {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  margin-left: 10px;
+  transform: rotate(45deg);
+}
+
+.collapsible[open] summary h2::after {
+  transform: rotate(-135deg);
 }
 
 @media (max-width: 768px) {

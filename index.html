@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Correspondence Analysis</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.20.1/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="hero">
+    <div>
+      <p class="eyebrow">Weisen-U</p>
+      <h1>Correspondence Analysis</h1>
+      <p class="lede">Upload the query (6) and query (7) workbooks, pick the companies and disciplines you care about, and the site will recreate the deliverable summaries, revision tables, and charts.</p>
+      <div class="cta-row">
+        <label class="file-button">
+          <input id="file-input" type="file" accept=".xlsx,.xls" multiple>
+          <span>Upload Excel</span>
+        </label>
+        <button id="clear-btn" class="ghost">Reset filters</button>
+      </div>
+      <p class="hint">Tip: select both query (6) and query (7) to unlock revision timelines and verdict summaries.</p>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="panel filters">
+      <div class="panel-header">
+        <h2>Filters</h2>
+        <div class="meta" id="file-meta">No file loaded</div>
+      </div>
+      <div class="filters-grid">
+        <div class="filter">
+          <label for="origin-filter">Originating company</label>
+          <select id="origin-filter" multiple></select>
+        </div>
+        <div class="filter">
+          <label for="recipient-filter">Recipient company</label>
+          <select id="recipient-filter" multiple></select>
+        </div>
+        <div class="filter">
+          <label for="discipline-filter">Discipline</label>
+          <select id="discipline-filter" multiple></select>
+        </div>
+        <div class="filter">
+          <label for="status-filter">Correspondence status</label>
+          <select id="status-filter" multiple></select>
+        </div>
+        <div class="filter">
+          <label for="verdict-filter">Final review verdict</label>
+          <select id="verdict-filter" multiple></select>
+        </div>
+        <div class="filter">
+          <label for="issue-filter">Issue reason</label>
+          <select id="issue-filter" multiple></select>
+        </div>
+        <div class="filter">
+          <label for="reason-text-filter">Issue reason text</label>
+          <select id="reason-text-filter" multiple></select>
+        </div>
+        <div class="filter">
+          <label for="revision-filter">Revision</label>
+          <select id="revision-filter" multiple></select>
+        </div>
+        <div class="filter">
+          <label for="type-filter">Correspondence type</label>
+          <select id="type-filter" multiple></select>
+        </div>
+        <div class="filter">
+          <label for="search-input">Search (document, title, correspondence no.)</label>
+          <input id="search-input" type="search" placeholder="e.g. SG532-KFW-00-EL-LST-0001">
+        </div>
+      </div>
+    </section>
+
+    <section class="panel stats">
+      <div class="panel-header">
+        <h2>At a glance</h2>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <p class="label">Rows loaded</p>
+          <p class="value" id="rows-loaded">0</p>
+          <p class="sub" id="rows-loaded-sub">documents + correspondences</p>
+        </div>
+        <div class="stat-card">
+          <p class="label">Unique documents</p>
+          <p class="value" id="doc-count">0</p>
+          <p class="sub" id="doc-count-sub">latest revision per document</p>
+        </div>
+        <div class="stat-card">
+          <p class="label">Under review</p>
+          <p class="value" id="under-review">0</p>
+          <p class="sub" id="under-review-sub">open reviews (latest per document)</p>
+        </div>
+        <div class="stat-card">
+          <p class="label">Overdue</p>
+          <p class="value" id="overdue-count">0</p>
+          <p class="sub" id="overdue-sub">response due date passed</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel summary">
+      <div class="panel-header">
+        <h2>Discipline summary</h2>
+        <p class="meta">Mimics the pivot tables in the deliverables sheet.</p>
+      </div>
+      <div class="table-wrap two-col">
+        <div>
+          <h3>Total drawings/documents</h3>
+          <table id="discipline-totals"></table>
+        </div>
+        <div>
+          <h3>Status by discipline</h3>
+          <table id="status-pivot"></table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel charts">
+      <div class="panel-header">
+        <h2>Charts</h2>
+        <p class="meta">Auto-updates with the current filters.</p>
+      </div>
+      <div class="chart-grid">
+        <div class="chart-card">
+          <p>Status distribution</p>
+          <canvas id="status-chart" height="200"></canvas>
+        </div>
+        <div class="chart-card">
+          <p>Discipline mix</p>
+          <canvas id="discipline-chart" height="200"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Revision timeline (Under Review + Resubmissions)</h2>
+        <p class="meta">Shows the latest date for each revision letter; duplicates are collapsed.</p>
+      </div>
+      <div class="table-wrap">
+        <table id="revision-table"></table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Filtered records</h2>
+        <p class="meta">All rows that match the current filters (documents + correspondences).</p>
+      </div>
+      <div class="table-wrap">
+        <table id="records-table"></table>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
